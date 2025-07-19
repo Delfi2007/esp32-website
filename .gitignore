@@ -1,0 +1,15 @@
+# Ignore node modules
+node_modules/
+
+# Firebase private key (do NOT upload this)
+firebase-key.json
+
+# Optional: dotenv config files
+.env
+
+# Logs (optional)
+*.log
+
+# OS-specific junk files
+.DS_Store
+Thumbs.db
