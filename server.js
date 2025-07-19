@@ -2,18 +2,20 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // Allow dynamic port on Render
 
-// Firebase Admin Initialization
-const serviceAccount = require('./firebase-key.json');
+// Parse JSON bodies
+app.use(bodyParser.json());
+
+// Firebase Admin Initialization using ENV variable
+const serviceAccount = JSON.parse(process.env.FIREBASE_KEY); // key as string in Render
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://esp32-iot-842e3-default-rtdb.asia-southeast1.firebasedatabase.app/"
 });
 
 const db = admin.database();
-
-app.use(bodyParser.json());
 
 // API Endpoint to receive data from ESP32
 app.post('/lora', (req, res) => {
@@ -42,5 +44,5 @@ app.post('/lora', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 ESP32 backend running at http://localhost:${PORT}`);
+  console.log(`🚀 ESP32 backend running on port ${PORT}`);
 });
