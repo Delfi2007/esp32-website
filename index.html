@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Power Monitor Data</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6; /* Light gray background */
+        }
+        /* Custom scrollbar for the table container */
+        .table-container::-webkit-scrollbar {
+            height: 8px;
+        }
+        .table-container::-webkit-scrollbar-track {
+            background: #e0e0e0;
+            border-radius: 10px;
+        }
+        .table-container::-webkit-scrollbar-thumb {
+            background: #a0a0a0;
+            border-radius: 10px;
+        }
+        .table-container::-webkit-scrollbar-thumb:hover {
+            background: #808080;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white shadow-lg rounded-xl p-6 md:p-8 w-full max-w-6xl">
+        <h1 class="text-3xl md:text-4xl font-bold text-gray-800 mb-6 text-center">
+            ESP32 Power Monitor Dashboard
+        </h1>
+
+        <div id="loading-message" class="text-center text-gray-600 text-lg mb-4">
+            Loading data...
+        </div>
+
+        <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md relative mb-4" role="alert">
+            <strong class="font-bold">Error!</strong>
+            <span class="block sm:inline" id="error-text"></span>
+        </div>
+
+        <div class="overflow-x-auto rounded-lg shadow-md table-container">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tl-lg">
+                            Device ID
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Timestamp (MCU)
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Voltage (V)
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Current (A)
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Power (W)
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Energy (Wh)
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            RSSI (dBm)
+                        </th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tr-lg">
+                            Server Timestamp
+                        </th>
+                    </tr>
+                </thead>
+                <tbody id="data-table-body" class="bg-white divide-y divide-gray-200">
+                    <!-- Data rows will be inserted here by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+
+        <div id="no-data-message" class="hidden text-center text-gray-500 text-lg mt-6">
+            No data available yet. Waiting for ESP32 readings...
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+
+    <script>
+        // Your Firebase configuration
+        // IMPORTANT: Replace with your actual Firebase config if different from the backend's databaseURL
+        // The databaseURL should match the one used in your Node.js backend
+        const firebaseConfig = {
+            databaseURL: "https://esp32-iot-842e3-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        const powerMonitorRef = database.ref('power_monitor_data');
+
+        const dataTableBody = document.getElementById('data-table-body');
+        const loadingMessage = document.getElementById('loading-message');
+        const errorMessage = document.getElementById('error-message');
+        const errorText = document.getElementById('error-text');
+        const noDataMessage = document.getElementById('no-data-message');
+
+        // Function to display error messages
+        function displayError(message) {
+            loadingMessage.classList.add('hidden');
+            errorMessage.classList.remove('hidden');
+            errorText.textContent = message;
+            console.error(message);
+        }
+
+        // Listen for data changes in real-time
+        powerMonitorRef.on('value', (snapshot) => {
+            try {
+                loadingMessage.classList.add('hidden'); // Hide loading message once data starts coming
+                errorMessage.classList.add('hidden'); // Hide any previous errors
+
+                const data = snapshot.val();
+                dataTableBody.innerHTML = ''; // Clear existing table rows
+
+                if (data) {
+                    noDataMessage.classList.add('hidden'); // Hide no data message
+                    // Convert object of objects to an array for easier sorting and display
+                    const dataArray = Object.keys(data).map(key => ({
+                        id: key,
+                        ...data[key]
+                    }));
+
+                    // Sort data by server timestamp in descending order (most recent first)
+                    dataArray.sort((a, b) => new Date(b.timestamp_server) - new Date(a.timestamp_server));
+
+                    dataArray.forEach(item => {
+                        const row = document.createElement('tr');
+                        row.classList.add('hover:bg-gray-50'); // Add hover effect to rows
+
+                        // Format server timestamp for better readability
+                        const serverTimestamp = new Date(item.timestamp_server).toLocaleString();
+
+                        row.innerHTML = `
+                            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                                ${item.deviceId || 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${item.timestamp_mcu || 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${typeof item.voltage !== 'undefined' ? item.voltage.toFixed(2) : 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${typeof item.current !== 'undefined' ? item.current.toFixed(3) : 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${typeof item.power !== 'undefined' ? item.power.toFixed(2) : 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${typeof item.energy !== 'undefined' ? item.energy.toFixed(2) : 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${typeof item.rssi !== 'undefined' ? item.rssi : 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                ${serverTimestamp}
+                            </td>
+                        `;
+                        dataTableBody.appendChild(row);
+                    });
+                } else {
+                    noDataMessage.classList.remove('hidden'); // Show no data message if no data exists
+                }
+            } catch (err) {
+                displayError(`Failed to process data: ${err.message}`);
+            }
+        }, (errorObject) => {
+            // Handle errors during data fetching
+            displayError(`Data read failed: ${errorObject.code} - ${errorObject.message}`);
+        });
+    </script>
+</body>
+</html>
