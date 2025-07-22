@@ -8,7 +8,9 @@ const PORT = process.env.PORT || 3000; // Allow dynamic port on Render
 app.use(bodyParser.json());
 
 // Firebase Admin Initialization using ENV variable
-const serviceAccount = JSON.parse(process.env.FIREBASE_KEY); // key as string in Render
+// IMPORTANT: Ensure your FIREBASE_KEY environment variable on Render
+// contains the service account JSON as a single-line string.
+const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -19,19 +21,30 @@ const db = admin.database();
 
 // API Endpoint to receive data from ESP32
 app.post('/lora', (req, res) => {
-  const { data, rssi } = req.body;
+  // Directly destructure the fields from req.body, as ESP32 is sending them directly
+  const { deviceId, timestamp, voltage, current, power, energy, rssi } = req.body;
 
-  if (!data || typeof rssi === 'undefined') {
-    return res.status(400).send('Invalid data format.');
+  // Basic validation to ensure essential fields are present
+  if (!deviceId || typeof timestamp === 'undefined' || typeof voltage === 'undefined' ||
+      typeof current === 'undefined' || typeof power === 'undefined' || typeof energy === 'undefined' ||
+      typeof rssi === 'undefined') {
+    return res.status(400).send('Invalid data format. Missing one or more required fields.');
   }
 
+  // Construct the payload to store in Firebase
   const payload = {
-    data: data,
+    deviceId: deviceId,
+    timestamp_mcu: timestamp, // Timestamp from the MCU (in milliseconds since boot)
+    voltage: voltage,
+    current: current,
+    power: power,
+    energy: energy,
     rssi: rssi,
-    timestamp: new Date().toISOString()
+    timestamp_server: new Date().toISOString() // Server-side timestamp for when data was received
   };
 
-  db.ref('esp32_data').push(payload)
+  // Push the structured payload to Firebase
+  db.ref('power_monitor_data').push(payload) // Changed path to 'power_monitor_data' for clarity
     .then(() => {
       console.log("✅ Data stored:", payload);
       res.status(200).send("Data stored successfully");
