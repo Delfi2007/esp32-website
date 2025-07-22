@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Power Monitor Analytics</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- D3.js CDN for powerful visualizations -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* Darker background for modern feel */
+            color: #e2e8f0; /* Light text color */
+        }
+        .dashboard-grid {
+            display: grid;
+            gap: 1.5rem; /* Equivalent to Tailwind gap-6 */
+            grid-template-columns: repeat(1, minmax(0, 1fr)); /* Default to 1 column */
+        }
+        @media (min-width: 768px) { /* md breakpoint */
+            .dashboard-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr)); /* 2 columns on medium screens */
+            }
+        }
+        @media (min-width: 1024px) { /* lg breakpoint */
+            .dashboard-grid {
+                /* Adjusted grid areas to remove static content and focus on charts */
+                grid-template-columns: 1fr 1fr 1fr; /* 3 columns for charts */
+                grid-template-areas:
+                    "time-selection time-selection time-selection"
+                    "voltage-chart energy-chart ."; /* Voltage, Energy, and a blank space for now */
+            }
+            /* Re-defined grid areas for dynamic content */
+            .grid-area-time-selection { grid-area: time-selection; }
+            .grid-area-voltage { grid-area: voltage-chart; }
+            .grid-area-energy { grid-area: energy-chart; }
+            /* Removed other static grid areas */
+        }
+
+        .chart-card {
+            background-color: #2d3748; /* Darker card background */
+            border-radius: 0.75rem; /* rounded-xl */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1); /* Stronger shadow */
+            padding: 1.5rem; /* p-6 */
+            color: #e2e8f0; /* Light text */
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-card h2 {
+            color: #cbd5e0; /* Lighter heading color */
+        }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            flex-grow: 1; /* Allow chart to take available height */
+            padding-bottom: 55%; /* Aspect ratio for responsiveness */
+            height: 0;
+            overflow: hidden;
+        }
+        .chart-container svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            border-radius: 6px;
+            pointer-events: none;
+            font-size: 0.875rem;
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.2s ease-in-out;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .line {
+            fill: none;
+            stroke-width: 3px;
+            transition: stroke 0.3s ease-in-out;
+        }
+        .area {
+            fill-opacity: 0.6;
+            transition: fill 0.3s ease-in-out;
+        }
+        .axis path,
+        .axis line {
+            fill: none;
+            stroke: #4a5568; /* Darker gray for axes */
+            shape-rendering: crispEdges;
+        }
+        .axis text {
+            font-size: 0.8rem;
+            fill: #a0aec0; /* Lighter gray for axis text */
+        }
+        .dot {
+            transition: fill 0.3s ease-in-out, stroke 0.3s ease-in-out;
+        }
+        .bar {
+            fill: #6366f1; /* Indigo-500 */
+            transition: fill 0.3s ease-in-out;
+        }
+        .bar:hover {
+            fill: #4338ca; /* Indigo-700 on hover */
+        }
+        .reference-line {
+            stroke: #f56565; /* Red-400 */
+            stroke-dasharray: 5,5;
+            stroke-width: 1.5px;
+        }
+        .brush .selection {
+            fill: #4f46e5;
+            fill-opacity: 0.2;
+            stroke: #4f46e5;
+            stroke-dasharray: 2,2;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+    <div class="w-full max-w-7xl mx-auto">
+        <h1 class="text-4xl md:text-5xl font-extrabold text-gray-100 mb-8 text-center drop-shadow-lg">
+            Energy Dashboard
+        </h1>
+
+        <div id="loading-message" class="text-center text-gray-300 text-xl mb-6">
+            <div class="animate-spin inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mr-3"></div>
+            Loading analytics data...
+        </div>
+
+        <div id="error-message" class="hidden bg-red-800 border border-red-600 text-red-100 px-6 py-4 rounded-lg relative mb-6" role="alert">
+            <strong class="font-bold">Error!</strong>
+            <span class="block sm:inline ml-2" id="error-text"></span>
+        </div>
+
+        <div id="no-data-message" class="hidden text-center text-gray-400 text-xl mt-12">
+            No data available for analytics yet. Waiting for ESP32 readings...
+        </div>
+
+        <div id="dashboard-content" class="hidden dashboard-grid">
+            <!-- Time Range Selection -->
+            <div class="lg:col-span-3 chart-card grid-area-time-selection flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-6">
+                <div class="flex items-center space-x-3">
+                    <label for="time-range-select" class="text-gray-300 font-semibold">Time Range:</label>
+                    <select id="time-range-select" class="block w-full sm:w-auto px-4 py-2 border border-gray-600 bg-gray-700 text-white rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-200">
+                        <option value="all">All Data</option>
+                        <option value="24h">Last 24 Hours</option>
+                        <option value="7d">Last 7 Days</option>
+                        <option value="30d">Last 30 Days</option>
+                    </select>
+                </div>
+                <button id="reset-zoom-button" class="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition duration-200">
+                    Reset Zoom
+                </button>
+            </div>
+
+            <!-- Voltage Chart Card -->
+            <div class="chart-card grid-area-voltage">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold">Voltage</h2>
+                    <div class="text-sm text-gray-400">Realtime - last day</div>
+                </div>
+                <div class="chart-container">
+                    <svg id="voltage-chart"></svg>
+                </div>
+            </div>
+
+            <!-- Energy Consumption Chart Card -->
+            <div class="chart-card grid-area-energy">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold">Energy Consumption</h2>
+                    <div class="text-sm text-gray-400">Daily kWh</div>
+                </div>
+                <div class="chart-container">
+                    <svg id="energy-consumption-chart"></svg>
+                </div>
+            </div>
+
+            <!-- Current (Frequency Proxy) Chart Card -->
+            <div class="chart-card">
+                <h2 class="text-2xl font-bold mb-4">Current (Frequency Proxy)</h2>
+                <div class="chart-container">
+                    <svg id="frequency-chart"></svg>
+                </div>
+            </div>
+
+            <!-- Amperage (Current) Chart Card -->
+            <div class="chart-card">
+                <h2 class="text-2xl font-bold mb-4">Amperage (Current)</h2>
+                <div class="chart-container">
+                    <svg id="amperage-chart"></svg>
+                </div>
+            </div>
+
+            <!-- RSSI Chart Card -->
+            <div class="chart-card">
+                <h2 class="text-2xl font-bold mb-4">RSSI (Signal Strength)</h2>
+                <div class="chart-container">
+                    <svg id="rssi-chart"></svg>
+                </div>
+            </div>
+
+            <!-- Example for a dynamic "Cost Predicted" based on energy data -->
+            <div class="chart-card col-span-full md:col-span-1">
+                <h2 class="text-2xl font-bold mb-4">Predicted Cost</h2>
+                <div class="flex flex-col items-center justify-center flex-grow">
+                    <div id="predicted-cost-display" class="text-5xl font-bold text-green-400">
+                        $0.00
+                    </div>
+                    <p class="text-gray-400 text-sm mt-2">
+                        (Based on Energy data and $0.15/kWh)
+                    </p>
+                </div>
+            </div>
+
+            <!-- Example for a dynamic "Usage Estimation" based on energy data -->
+            <div class="chart-card col-span-full md:col-span-2">
+                <h2 class="text-2xl font-bold mb-4">Usage Summary</h2>
+                <div class="flex flex-col items-center justify-center flex-grow">
+                    <p class="text-gray-300 text-xl mb-2">Total Energy Consumed: <span id="total-energy-display" class="font-bold text-green-400">0.00 kWh</span></p>
+                    <p class="text-gray-300 text-xl">Average Voltage: <span id="avg-voltage-display" class="font-bold text-orange-400">0.00 V</span></p>
+                    <p class="text-gray-300 text-xl">Average Current: <span id="avg-current-display" class="font-bold text-blue-400">0.00 A</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+
+    <script>
+        // Your Firebase configuration
+        const firebaseConfig = {
+            databaseURL: "https://esp32-iot-842e3-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        const powerMonitorRef = database.ref('power_monitor_data');
+
+        // DOM Elements
+        const loadingMessage = document.getElementById('loading-message');
+        const errorMessage = document.getElementById('error-message');
+        const errorText = document.getElementById('error-text');
+        const noDataMessage = document.getElementById('no-data-message');
+        const dashboardContent = document.getElementById('dashboard-content');
+        const timeRangeSelect = document.getElementById('time-range-select');
+        const resetZoomButton = document.getElementById('reset-zoom-button');
+
+        // D3 Chart Selections
+        const voltageSvg = d3.select("#voltage-chart");
+        const energyConsumptionSvg = d3.select("#energy-consumption-chart");
+        const frequencySvg = d3.select("#frequency-chart"); // Using Current for this
+        const amperageSvg = d3.select("#amperage-chart"); // Area chart for Current
+        const rssiSvg = d3.select("#rssi-chart"); // New RSSI chart
+
+        // Dynamic content display elements
+        const predictedCostDisplay = document.getElementById('predicted-cost-display');
+        const totalEnergyDisplay = document.getElementById('total-energy-display');
+        const avgVoltageDisplay = document.getElementById('avg-voltage-display');
+        const avgCurrentDisplay = document.getElementById('avg-current-display');
+
+
+        // Tooltip element
+        const tooltip = d3.select("body").append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
+
+        let rawChartData = []; // To store all fetched raw data
+        let currentVoltageZoomTransform = d3.zoomIdentity; // To store the current zoom state for the voltage chart
+        let currentFrequencyZoomTransform = d3.zoomIdentity; // For frequency chart
+        let currentAmperageZoomTransform = d3.zoomIdentity; // For amperage chart
+        let currentRssiZoomTransform = d3.zoomIdentity; // For RSSI chart
+
+
+        // Function to display error messages
+        function displayError(message) {
+            loadingMessage.classList.add('hidden');
+            dashboardContent.classList.add('hidden');
+            noDataMessage.classList.add('hidden');
+            errorMessage.classList.remove('hidden');
+            errorText.textContent = message;
+            console.error(message);
+        }
+
+        // Function to filter data based on selected time range
+        function filterDataByTimeRange(data, range) {
+            if (range === 'all') {
+                return data;
+            }
+
+            const now = new Date();
+            let cutoffDate;
+
+            if (range === '24h') {
+                cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+            } else if (range === '7d') {
+                cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            } else if (range === '30d') {
+                cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            }
+
+            return data.filter(d => d.timestamp_server >= cutoffDate);
+        }
+
+        // --- Generic Line Chart Drawing Function ---
+        function drawLineChart(svgElement, data, metric, color, title, currentTransform) {
+            svgElement.selectAll("*").remove(); // Clear previous chart elements
+
+            if (!data || data.length === 0) {
+                return;
+            }
+
+            const parentWidth = svgElement.node().parentNode.clientWidth;
+            const parentHeight = svgElement.node().parentNode.clientHeight;
+
+            const margin = { top: 20, right: 30, bottom: 60, left: 60 };
+            const width = parentWidth - margin.left - margin.right;
+            const height = parentHeight - margin.top - margin.bottom;
+
+            const g = svgElement.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Initial X and Y scales
+            const x = d3.scaleTime()
+                .domain(d3.extent(data, d => d.timestamp_server))
+                .range([0, width]);
+
+            const y = d3.scaleLinear()
+                .domain([d3.min(data, d => d[metric]) * 0.9, d3.max(data, d => d[metric]) * 1.1])
+                .range([height, 0]);
+
+            // Define the line generator
+            const line = d3.line()
+                .x(d => x(d.timestamp_server))
+                .y(d => y(d[metric]));
+
+            // Axes
+            const xAxis = g.append("g")
+                .attr("class", "axis x-axis")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x).ticks(d3.timeHour.every(6)).tickFormat(d3.timeFormat("%H:%M")))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end");
+
+            const yAxis = g.append("g")
+                .attr("class", "axis y-axis")
+                .call(d3.axisLeft(y).ticks(5));
+
+            // Y axis label
+            g.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("y", 0 - margin.left)
+                .attr("x", 0 - (height / 2))
+                .attr("dy", "1em")
+                .style("text-anchor", "middle")
+                .style("fill", "#a0aec0")
+                .text(title);
+
+            // Line path
+            const linePath = g.append("path")
+                .datum(data)
+                .attr("class", "line")
+                .attr("stroke", color);
+
+            // Dots for data points
+            const dots = g.selectAll(".dot")
+                .data(data)
+                .enter().append("circle")
+                .attr("class", "dot")
+                .attr("r", 4)
+                .attr("fill", color)
+                .attr("stroke", "#2d3748")
+                .attr("stroke-width", 1.5)
+                .on("mouseover", (event, d) => {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`
+                        <strong>Time:</strong> ${new Date(d.timestamp_server).toLocaleString()}<br/>
+                        <strong>${title}:</strong> ${d[metric].toFixed(2)}
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+
+            // Add horizontal reference lines for Voltage chart
+            if (metric === 'voltage') {
+                const avgVoltage = d3.mean(data, d => d.voltage);
+                g.append("line")
+                    .attr("class", "reference-line")
+                    .attr("x1", 0)
+                    .attr("x2", width)
+                    .attr("y1", y(avgVoltage))
+                    .attr("y2", y(avgVoltage))
+                    .attr("stroke", "#f6e05e"); // Yellow for average
+
+                g.append("text")
+                    .attr("x", width)
+                    .attr("y", y(avgVoltage) - 5)
+                    .attr("text-anchor", "end")
+                    .style("font-size", "0.75rem")
+                    .style("fill", "#f6e05e")
+                    .text(`Avg: ${avgVoltage.toFixed(2)}V`);
+
+                // Example fixed thresholds (adjust as needed)
+                const upperThreshold = 240;
+                const lowerThreshold = 210;
+
+                g.append("line")
+                    .attr("class", "reference-line")
+                    .attr("x1", 0)
+                    .attr("x2", width)
+                    .attr("y1", y(upperThreshold))
+                    .attr("y2", y(upperThreshold))
+                    .attr("stroke", "#f56565"); // Red for upper
+
+                g.append("line")
+                    .attr("class", "reference-line")
+                    .attr("x1", 0)
+                    .attr("x2", width)
+                    .attr("y1", y(lowerThreshold))
+                    .attr("y2", y(lowerThreshold))
+                    .attr("stroke", "#f56565"); // Red for lower
+            }
+
+
+            // Update function for zoom
+            function updateChart(event) {
+                // Store transform based on the SVG element
+                if (svgElement.node() === voltageSvg.node()) {
+                    currentVoltageZoomTransform = event.transform;
+                } else if (svgElement.node() === frequencySvg.node()) {
+                    currentFrequencyZoomTransform = event.transform;
+                } else if (svgElement.node() === amperageSvg.node()) {
+                    currentAmperageZoomTransform = event.transform;
+                } else if (svgElement.node() === rssiSvg.node()) {
+                    currentRssiZoomTransform = event.transform;
+                }
+
+                const newXScale = event.transform.rescaleX(x);
+                xAxis.call(d3.axisBottom(newXScale).ticks(d3.timeHour.every(6)).tickFormat(d3.timeFormat("%H:%M")))
+                    .selectAll("text")
+                    .attr("transform", "rotate(-45)")
+                    .style("text-anchor", "end");
+
+                linePath.attr("d", line.x(d => newXScale(d.timestamp_server)));
+                dots.attr("cx", d => newXScale(d.timestamp_server));
+
+                // Re-position reference lines if they exist
+                g.selectAll(".reference-line").attr("x1", newXScale.range()[0]).attr("x2", newXScale.range()[1]);
+                g.selectAll("text.reference-label").attr("x", newXScale.range()[1]);
+            }
+
+            // Zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([1, 10]) // Allow zooming up to 10x
+                .translateExtent([[0, 0], [width, height]]) // Confine pan to chart area
+                .extent([[0, 0], [width, height]])
+                .on("zoom", updateChart);
+
+            svgElement.call(zoom);
+
+            // Apply initial zoom transform if exists
+            svgElement.call(zoom.transform, currentTransform);
+
+            // Initial draw of line and dots
+            linePath.attr("d", line);
+            dots.attr("cx", d => x(d.timestamp_server)).attr("cy", d => y(d[metric]));
+        }
+
+        // --- Energy Consumption Bar Chart ---
+        function drawEnergyConsumptionChart(data) {
+            energyConsumptionSvg.selectAll("*").remove();
+
+            if (!data || data.length === 0) {
+                return;
+            }
+
+            // Aggregate data by day for total energy
+            const dailyTotals = d3.rollup(data,
+                v => d3.sum(v, d => d.energy), // Calculate sum of energy
+                d => d3.timeDay.floor(d.timestamp_server) // Group by day
+            );
+
+            const aggregatedData = Array.from(dailyTotals, ([key, value]) => ({
+                date: key,
+                totalEnergy: value
+            })).sort((a, b) => a.date - b.date); // Sort by date
+
+            if (aggregatedData.length === 0) {
+                return;
+            }
+
+            const parentWidth = energyConsumptionSvg.node().parentNode.clientWidth;
+            const parentHeight = energyConsumptionSvg.node().parentNode.clientHeight;
+
+            const margin = { top: 20, right: 30, bottom: 60, left: 60 };
+            const width = parentWidth - margin.left - margin.right;
+            const height = parentHeight - margin.top - margin.bottom;
+
+            const g = energyConsumptionSvg.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // X scale (Dates)
+            const x = d3.scaleBand()
+                .domain(aggregatedData.map(d => d.date))
+                .range([0, width])
+                .padding(0.2);
+
+            // Y scale (Total Energy)
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(aggregatedData, d => d.totalEnergy) * 1.1])
+                .range([height, 0]);
+
+            // X Axis
+            g.append("g")
+                .attr("class", "axis x-axis")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x).tickFormat(d3.timeFormat("%b %d")))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end");
+
+            // Y Axis
+            g.append("g")
+                .attr("class", "axis y-axis")
+                .call(d3.axisLeft(y).ticks(5));
+
+            // Y axis label
+            g.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("y", 0 - margin.left)
+                .attr("x", 0 - (height / 2))
+                .attr("dy", "1em")
+                .style("text-anchor", "middle")
+                .style("fill", "#a0aec0")
+                .text("Energy (Wh)");
+
+            // Bars
+            g.selectAll(".bar")
+                .data(aggregatedData)
+                .enter().append("rect")
+                .attr("class", "bar")
+                .attr("x", d => x(d.date))
+                .attr("y", d => y(d.totalEnergy))
+                .attr("width", x.bandwidth())
+                .attr("height", d => height - y(d.totalEnergy))
+                .attr("fill", "#60a5fa") /* Blue-400 */
+                .on("mouseover", (event, d) => {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`
+                        <strong>Date:</strong> ${d3.timeFormat("%b %d, %Y")(d.date)}<br/>
+                        <strong>Total Energy:</strong> ${d.totalEnergy.toFixed(2)} Wh
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+        }
+
+        // --- Amperage Chart (Area Chart for Current) ---
+        function drawAmperageChart(data) {
+            amperageSvg.selectAll("*").remove();
+
+            if (!data || data.length === 0) {
+                return;
+            }
+
+            const parentWidth = amperageSvg.node().parentNode.clientWidth;
+            const parentHeight = amperageSvg.node().parentNode.clientHeight;
+
+            const margin = { top: 20, right: 30, bottom: 60, left: 60 };
+            const width = parentWidth - margin.left - margin.right;
+            const height = parentHeight - margin.top - margin.bottom;
+
+            const g = amperageSvg.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Initial X and Y scales
+            const x = d3.scaleTime()
+                .domain(d3.extent(data, d => d.timestamp_server))
+                .range([0, width]);
+
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(data, d => d.current) * 1.1]) // Amperage (Current) starts from 0
+                .range([height, 0]);
+
+            // Define the area generator
+            const area = d3.area()
+                .x(d => x(d.timestamp_server))
+                .y0(height) // Start from the bottom of the chart
+                .y1(d => y(d.current));
+
+            // Axes
+            const xAxis = g.append("g")
+                .attr("class", "axis x-axis")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x).ticks(d3.timeHour.every(6)).tickFormat(d3.timeFormat("%H:%M")))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end");
+
+            const yAxis = g.append("g")
+                .attr("class", "axis y-axis")
+                .call(d3.axisLeft(y).ticks(5));
+
+            // Y axis label
+            g.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("y", 0 - margin.left)
+                .attr("x", 0 - (height / 2))
+                .attr("dy", "1em")
+                .style("text-anchor", "middle")
+                .style("fill", "#a0aec0")
+                .text("Amperage (A)");
+
+            // Area path
+            const areaPath = g.append("path")
+                .datum(data)
+                .attr("class", "area")
+                .attr("fill", "#f6ad55") /* Orange-400 */
+                .attr("d", area);
+
+            // Dots for data points (optional, but good for interactivity)
+            const dots = g.selectAll(".dot")
+                .data(data)
+                .enter().append("circle")
+                .attr("class", "dot")
+                .attr("r", 4)
+                .attr("fill", "#f6ad55")
+                .attr("stroke", "#2d3748")
+                .attr("stroke-width", 1.5)
+                .on("mouseover", (event, d) => {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`
+                        <strong>Time:</strong> ${new Date(d.timestamp_server).toLocaleString()}<br/>
+                        <strong>Amperage:</strong> ${d.current.toFixed(3)} A
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+
+            // Update function for zoom
+            function updateChart(event) {
+                currentAmperageZoomTransform = event.transform;
+                const newXScale = event.transform.rescaleX(x);
+                xAxis.call(d3.axisBottom(newXScale).ticks(d3.timeHour.every(6)).tickFormat(d3.timeFormat("%H:%M")))
+                    .selectAll("text")
+                    .attr("transform", "rotate(-45)")
+                    .style("text-anchor", "end");
+
+                areaPath.attr("d", area.x(d => newXScale(d.timestamp_server)));
+                dots.attr("cx", d => newXScale(d.timestamp_server));
+            }
+
+            // Zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([1, 10])
+                .translateExtent([[0, 0], [width, height]])
+                .extent([[0, 0], [width, height]])
+                .on("zoom", updateChart);
+
+            amperageSvg.call(zoom);
+            amperageSvg.call(zoom.transform, currentAmperageZoomTransform);
+
+            areaPath.attr("d", area);
+            dots.attr("cx", d => x(d.timestamp_server)).attr("cy", d => y(d.current));
+        }
+
+        // --- RSSI Chart (Line Chart) ---
+        function drawRssiChart(data) {
+            rssiSvg.selectAll("*").remove();
+
+            if (!data || data.length === 0) {
+                return;
+            }
+
+            const parentWidth = rssiSvg.node().parentNode.clientWidth;
+            const parentHeight = rssiSvg.node().parentNode.clientHeight;
+
+            const margin = { top: 20, right: 30, bottom: 60, left: 60 };
+            const width = parentWidth - margin.left - margin.right;
+            const height = parentHeight - margin.top - margin.bottom;
+
+            const g = rssiSvg.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Initial X and Y scales
+            const x = d3.scaleTime()
+                .domain(d3.extent(data, d => d.timestamp_server))
+                .range([0, width]);
+
+            const y = d3.scaleLinear()
+                .domain([d3.min(data, d => d.rssi) * 1.1, d3.max(data, d => d.rssi) * 0.9]) // RSSI is usually negative, invert domain for better visualization
+                .range([height, 0]);
+
+            // Define the line generator
+            const line = d3.line()
+                .x(d => x(d.timestamp_server))
+                .y(d => y(d.rssi));
+
+            // Axes
+            const xAxis = g.append("g")
+                .attr("class", "axis x-axis")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x).ticks(d3.timeHour.every(6)).tickFormat(d3.timeFormat("%H:%M")))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end");
+
+            const yAxis = g.append("g")
+                .attr("class", "axis y-axis")
+                .call(d3.axisLeft(y).ticks(5));
+
+            // Y axis label
+            g.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("y", 0 - margin.left)
+                .attr("x", 0 - (height / 2))
+                .attr("dy", "1em")
+                .style("text-anchor", "middle")
+                .style("fill", "#a0aec0")
+                .text("RSSI (dBm)");
+
+            // Line path
+            const linePath = g.append("path")
+                .datum(data)
+                .attr("class", "line")
+                .attr("stroke", "#9f7aea"); // Purple-400
+
+            // Dots for data points
+            const dots = g.selectAll(".dot")
+                .data(data)
+                .enter().append("circle")
+                .attr("class", "dot")
+                .attr("r", 4)
+                .attr("fill", "#9f7aea")
+                .attr("stroke", "#2d3748")
+                .attr("stroke-width", 1.5)
+                .on("mouseover", (event, d) => {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`
+                        <strong>Time:</strong> ${new Date(d.timestamp_server).toLocaleString()}<br/>
+                        <strong>RSSI:</strong> ${d.rssi.toFixed(2)} dBm
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+
+            // Update function for zoom
+            function updateChart(event) {
+                currentRssiZoomTransform = event.transform;
+                const newXScale = event.transform.rescaleX(x);
+                xAxis.call(d3.axisBottom(newXScale).ticks(d3.timeHour.every(6)).tickFormat(d3.timeFormat("%H:%M")))
+                    .selectAll("text")
+                    .attr("transform", "rotate(-45)")
+                    .style("text-anchor", "end");
+
+                linePath.attr("d", line.x(d => newXScale(d.timestamp_server)));
+                dots.attr("cx", d => newXScale(d.timestamp_server));
+
+                g.selectAll(".reference-line").attr("x1", newXScale.range()[0]).attr("x2", newXScale.range()[1]);
+                g.selectAll("text.reference-label").attr("x", newXScale.range()[1]);
+            }
+
+            // Zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([1, 10])
+                .translateExtent([[0, 0], [width, height]])
+                .extent([[0, 0], [width, height]])
+                .on("zoom", updateChart);
+
+            rssiSvg.call(zoom);
+            rssiSvg.call(zoom.transform, currentRssiZoomTransform);
+
+            linePath.attr("d", line);
+            dots.attr("cx", d => x(d.timestamp_server)).attr("cy", d => y(d.rssi));
+        }
+
+
+        // Function to update dynamic text content
+        function updateDynamicContent(data) {
+            if (data.length === 0) {
+                predictedCostDisplay.textContent = '$0.00';
+                totalEnergyDisplay.textContent = '0.00 kWh';
+                avgVoltageDisplay.textContent = '0.00 V';
+                avgCurrentDisplay.textContent = '0.00 A';
+                return;
+            }
+
+            // Calculate total energy from filtered data
+            const totalEnergyWh = d3.sum(data, d => d.energy || 0);
+            const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
+            totalEnergyDisplay.textContent = `${totalEnergyKWh.toFixed(2)} kWh`;
+
+            // Calculate predicted cost (example rate: $0.15 per kWh)
+            const costPerKWh = 0.15;
+            const predictedCost = totalEnergyKWh * costPerKWh;
+            predictedCostDisplay.textContent = `$${predictedCost.toFixed(2)}`;
+
+            // Calculate average voltage and current
+            const avgVoltage = d3.mean(data, d => d.voltage || 0);
+            avgVoltageDisplay.textContent = `${avgVoltage.toFixed(2)} V`;
+
+            const avgCurrent = d3.mean(data, d => d.current || 0);
+            avgCurrentDisplay.textContent = `${avgCurrent.toFixed(2)} A`;
+        }
+
+
+        // Main render function to draw all charts and update dynamic content
+        function renderCharts() {
+            const selectedTimeRange = timeRangeSelect.value;
+            const filteredData = filterDataByTimeRange(rawChartData, selectedTimeRange);
+
+            // Filter out data points where the selected metric is undefined or null for each chart
+            const voltageData = filteredData.filter(d => typeof d.voltage !== 'undefined' && d.voltage !== null);
+            const energyData = filteredData.filter(d => typeof d.energy !== 'undefined' && d.energy !== null);
+            const currentData = filteredData.filter(d => typeof d.current !== 'undefined' && d.current !== null);
+            const rssiData = filteredData.filter(d => typeof d.rssi !== 'undefined' && d.rssi !== null);
+
+
+            if (filteredData.length === 0) {
+                dashboardContent.classList.add('hidden');
+                noDataMessage.classList.remove('hidden');
+                voltageSvg.selectAll("*").remove();
+                energyConsumptionSvg.selectAll("*").remove();
+                frequencySvg.selectAll("*").remove();
+                amperageSvg.selectAll("*").remove();
+                rssiSvg.selectAll("*").remove();
+                updateDynamicContent([]); // Clear dynamic content if no data
+                return;
+            } else {
+                dashboardContent.classList.remove('hidden');
+                noDataMessage.classList.add('hidden');
+            }
+
+            // Draw charts
+            drawLineChart(voltageSvg, voltageData, 'voltage', '#f6e05e', 'Voltage (V)', currentVoltageZoomTransform); // Yellow for Voltage
+            drawEnergyConsumptionChart(energyData); // Blue for Energy Bars
+            drawLineChart(frequencySvg, currentData, 'current', '#68d391', 'Current (A) - Frequency Proxy', currentFrequencyZoomTransform); // Green for Frequency (Current)
+            drawAmperageChart(currentData); // Orange for Amperage Area
+            drawLineChart(rssiSvg, rssiData, 'rssi', '#9f7aea', 'RSSI (dBm)', currentRssiZoomTransform); // Purple for RSSI
+
+            // Update dynamic textual content
+            updateDynamicContent(filteredData);
+        }
+
+        // Fetch data and draw initial charts
+        powerMonitorRef.on('value', (snapshot) => {
+            try {
+                loadingMessage.classList.add('hidden');
+                errorMessage.classList.add('hidden');
+
+                const data = snapshot.val();
+                if (data) {
+                    rawChartData = Object.keys(data).map(key => ({
+                        id: key,
+                        timestamp_server: new Date(data[key].timestamp_server), // Parse timestamp to Date object
+                        ...data[key]
+                    }));
+                    // Sort data by server timestamp for correct line drawing and aggregation
+                    rawChartData.sort((a, b) => a.timestamp_server - b.timestamp_server);
+
+                    renderCharts(); // Render all charts with fetched data
+                } else {
+                    dashboardContent.classList.add('hidden');
+                    noDataMessage.classList.remove('hidden');
+                    voltageSvg.selectAll("*").remove();
+                    energyConsumptionSvg.selectAll("*").remove();
+                    frequencySvg.selectAll("*").remove();
+                    amperageSvg.selectAll("*").remove();
+                    rssiSvg.selectAll("*").remove();
+                    updateDynamicContent([]); // Clear dynamic content if no data
+                }
+            } catch (err) {
+                displayError(`Failed to process data for charts: ${err.message}`);
+            }
+        }, (errorObject) => {
+            displayError(`Data read failed for analytics: ${errorObject.code} - ${errorObject.message}`);
+        });
+
+        // Event Listeners for controls
+        timeRangeSelect.addEventListener('change', () => {
+            // Reset all zoom transforms when time range changes
+            currentVoltageZoomTransform = d3.zoomIdentity;
+            currentFrequencyZoomTransform = d3.zoomIdentity;
+            currentAmperageZoomTransform = d3.zoomIdentity;
+            currentRssiZoomTransform = d3.zoomIdentity;
+            renderCharts();
+        });
+
+        resetZoomButton.addEventListener('click', () => {
+            currentVoltageZoomTransform = d3.zoomIdentity;
+            currentFrequencyZoomTransform = d3.zoomIdentity;
+            currentAmperageZoomTransform = d3.zoomIdentity;
+            currentRssiZoomTransform = d3.zoomIdentity;
+            renderCharts(); // Redraw chart to apply reset zoom
+        });
+
+        // Redraw charts on window resize for responsiveness
+        window.addEventListener('resize', renderCharts);
+    </script>
+</body>
+</html>
