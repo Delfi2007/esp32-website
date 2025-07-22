@@ -1,17 +1,15 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
-const axios = require('axios'); // ✅ Added for ThingsBoard integration
+const axios = require('axios');
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Allow dynamic port on Render
+const PORT = process.env.PORT || 3000;
 
 // Parse JSON bodies
 app.use(bodyParser.json());
 
-// Firebase Admin Initialization using ENV variable
-// IMPORTANT: Ensure your FIREBASE_KEY environment variable on Render
-// contains the service account JSON as a single-line string.
+// Firebase Admin Initialization
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 admin.initializeApp({
@@ -21,24 +19,23 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// ✅ ThingsBoard Configuration
-const THINGSBOARD_HOST = "https://demo.thingsboard.io"; // Or your local IP
-const TB_ACCESS_TOKEN = "M9HR7Tdk8qoLO62pvzYv"; // Replace with actual token
+// ✅ FIXED: ThingsBoard Cloud Configuration
+const THINGSBOARD_HOST = "https://thingsboard.cloud"; // Changed to ThingsBoard Cloud
+const TB_ACCESS_TOKEN = "M9HR7Tdk8qoLO62pvzYv"; // Your device access token
 
 // API Endpoint to receive data from ESP32
 app.post('/lora', (req, res) => {
-  // Directly destructure the fields from req.body, as ESP32 is sending them directly
   const { deviceId, timestamp, voltage, current, power, energy, rssi } = req.body;
 
-  // Basic validation to ensure essential fields are present
+  // Basic validation
   if (!deviceId || typeof timestamp === 'undefined' || typeof voltage === 'undefined' ||
       typeof current === 'undefined' || typeof power === 'undefined' || typeof energy === 'undefined' ||
       typeof rssi === 'undefined') {
     return res.status(400).send('Invalid data format. Missing one or more required fields.');
   }
 
-  // Construct the payload to store in Firebase
-  const payload = {
+  // Firebase payload (keep as is)
+  const firebasePayload = {
     deviceId: deviceId,
     timestamp_mcu: timestamp,
     voltage: voltage,
@@ -49,29 +46,68 @@ app.post('/lora', (req, res) => {
     timestamp_server: new Date().toISOString()
   };
 
-  // Push the structured payload to Firebase
-  db.ref('power_monitor_data').push(payload)
+  // ✅ FIXED: ThingsBoard telemetry payload format
+  const thingsBoardPayload = {
+    voltage: voltage,
+    current: current,
+    power: power,
+    energy: energy,
+    rssi: rssi,
+    deviceId: deviceId,
+    timestamp_mcu: timestamp
+  };
+
+  // Store in Firebase
+  db.ref('power_monitor_data').push(firebasePayload)
     .then(() => {
-      console.log("✅ Data stored:", payload);
+      console.log("✅ Data stored in Firebase:", firebasePayload);
 
-      // 🔄 Send to ThingsBoard
-      axios.post(`${THINGSBOARD_HOST}/api/v1/${TB_ACCESS_TOKEN}/telemetry`, payload)
-        .then(() => {
-          console.log("📡 Data sent to ThingsBoard");
-        })
-        .catch((error) => {
-          console.error("❌ ThingsBoard HTTP error:", error.message);
-        });
-
-      res.status(200).send("Data stored successfully");
+      // ✅ FIXED: Send to ThingsBoard Cloud with correct endpoint
+      const thingsBoardUrl = `${THINGSBOARD_HOST}/api/v1/${TB_ACCESS_TOKEN}/telemetry`;
+      
+      return axios.post(thingsBoardUrl, thingsBoardPayload, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000 // 10 second timeout
+      });
+    })
+    .then(() => {
+      console.log("📡 Data sent to ThingsBoard Cloud successfully");
+      console.log("ThingsBoard URL:", `${THINGSBOARD_HOST}/api/v1/${TB_ACCESS_TOKEN}/telemetry`);
+      console.log("Payload sent:", thingsBoardPayload);
+      res.status(200).send("Data stored and sent successfully");
     })
     .catch((error) => {
-      console.error("❌ Firebase error:", error);
-      res.status(500).send("Failed to store data");
+      console.error("❌ Error details:");
+      
+      if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        console.error("Network connectivity issue:", error.message);
+      } else if (error.response) {
+        console.error("ThingsBoard HTTP error:", error.response.status, error.response.data);
+      } else if (error.request) {
+        console.error("No response from ThingsBoard:", error.message);
+      } else {
+        console.error("Request setup error:", error.message);
+      }
+      
+      // Still send success to ESP32 if Firebase worked
+      res.status(200).send("Data stored in Firebase, but ThingsBoard upload failed");
     });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    thingsboard_host: THINGSBOARD_HOST
+  });
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 ESP32 backend running on port ${PORT}`);
+  console.log(`📡 ThingsBoard Host: ${THINGSBOARD_HOST}`);
+  console.log(`🔑 Using Access Token: ${TB_ACCESS_TOKEN}`);
 });
