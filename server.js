@@ -1,6 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
+const axios = require('axios'); // ✅ Added for ThingsBoard integration
+
 const app = express();
 const PORT = process.env.PORT || 3000; // Allow dynamic port on Render
 
@@ -19,6 +21,10 @@ admin.initializeApp({
 
 const db = admin.database();
 
+// ✅ ThingsBoard Configuration
+const THINGSBOARD_HOST = "https://demo.thingsboard.io"; // Or your local IP
+const TB_ACCESS_TOKEN = "M9HR7Tdk8qoLO62pvzYv"; // Replace with actual token
+
 // API Endpoint to receive data from ESP32
 app.post('/lora', (req, res) => {
   // Directly destructure the fields from req.body, as ESP32 is sending them directly
@@ -34,19 +40,29 @@ app.post('/lora', (req, res) => {
   // Construct the payload to store in Firebase
   const payload = {
     deviceId: deviceId,
-    timestamp_mcu: timestamp, // Timestamp from the MCU (in milliseconds since boot)
+    timestamp_mcu: timestamp,
     voltage: voltage,
     current: current,
     power: power,
     energy: energy,
     rssi: rssi,
-    timestamp_server: new Date().toISOString() // Server-side timestamp for when data was received
+    timestamp_server: new Date().toISOString()
   };
 
   // Push the structured payload to Firebase
-  db.ref('power_monitor_data').push(payload) // Changed path to 'power_monitor_data' for clarity
+  db.ref('power_monitor_data').push(payload)
     .then(() => {
       console.log("✅ Data stored:", payload);
+
+      // 🔄 Send to ThingsBoard
+      axios.post(`${THINGSBOARD_HOST}/api/v1/${TB_ACCESS_TOKEN}/telemetry`, payload)
+        .then(() => {
+          console.log("📡 Data sent to ThingsBoard");
+        })
+        .catch((error) => {
+          console.error("❌ ThingsBoard HTTP error:", error.message);
+        });
+
       res.status(200).send("Data stored successfully");
     })
     .catch((error) => {
