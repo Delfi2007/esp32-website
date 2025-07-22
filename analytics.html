@@ -28,17 +28,25 @@
         }
         @media (min-width: 1024px) { /* lg breakpoint */
             .dashboard-grid {
-                /* Adjusted grid areas to remove static content and focus on charts */
+                /* Adjusted grid areas for dynamic content only */
                 grid-template-columns: 1fr 1fr 1fr; /* 3 columns for charts */
                 grid-template-areas:
                     "time-selection time-selection time-selection"
-                    "voltage-chart energy-chart ."; /* Voltage, Energy, and a blank space for now */
+                    "voltage-chart energy-chart current-chart"
+                    "amperage-chart rssi-chart predicted-cost"
+                    "peak-hours-dist identified-peak-hours usage-summary";
             }
-            /* Re-defined grid areas for dynamic content */
+            /* Defined grid areas for specific dynamic cards */
             .grid-area-time-selection { grid-area: time-selection; }
             .grid-area-voltage { grid-area: voltage-chart; }
             .grid-area-energy { grid-area: energy-chart; }
-            /* Removed other static grid areas */
+            .grid-area-current { grid-area: current-chart; } /* Added for frequency chart */
+            .grid-area-amperage { grid-area: amperage-chart; }
+            .grid-area-rssi { grid-area: rssi-chart; }
+            .grid-area-predicted-cost { grid-area: predicted-cost; }
+            .grid-area-peak-hours-dist { grid-area: peak-hours-dist; }
+            .grid-area-identified-peak-hours { grid-area: identified-peak-hours; }
+            .grid-area-usage-summary { grid-area: usage-summary; }
         }
 
         .chart-card {
@@ -60,6 +68,9 @@
             padding-bottom: 55%; /* Aspect ratio for responsiveness */
             height: 0;
             overflow: hidden;
+        }
+        .chart-container.pie-chart {
+            padding-bottom: 75%; /* More height for pie chart */
         }
         .chart-container svg {
             position: absolute;
@@ -123,6 +134,22 @@
             stroke: #4f46e5;
             stroke-dasharray: 2,2;
         }
+        .pie-label {
+            font-size: 0.8rem;
+            fill: #e2e8f0;
+            text-anchor: middle;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .legend-color-box {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            margin-right: 0.5rem;
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center p-4">
@@ -166,7 +193,7 @@
             <div class="chart-card grid-area-voltage">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="text-2xl font-bold">Voltage</h2>
-                    <div class="text-sm text-gray-400">Realtime - last day</div>
+                    <div class="text-sm text-gray-400">Realtime</div>
                 </div>
                 <div class="chart-container">
                     <svg id="voltage-chart"></svg>
@@ -177,7 +204,7 @@
             <div class="chart-card grid-area-energy">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="text-2xl font-bold">Energy Consumption</h2>
-                    <div class="text-sm text-gray-400">Daily kWh</div>
+                    <div class="text-sm text-gray-400">Daily Wh</div>
                 </div>
                 <div class="chart-container">
                     <svg id="energy-consumption-chart"></svg>
@@ -185,7 +212,7 @@
             </div>
 
             <!-- Current (Frequency Proxy) Chart Card -->
-            <div class="chart-card">
+            <div class="chart-card grid-area-current">
                 <h2 class="text-2xl font-bold mb-4">Current (Frequency Proxy)</h2>
                 <div class="chart-container">
                     <svg id="frequency-chart"></svg>
@@ -193,7 +220,7 @@
             </div>
 
             <!-- Amperage (Current) Chart Card -->
-            <div class="chart-card">
+            <div class="chart-card grid-area-amperage">
                 <h2 class="text-2xl font-bold mb-4">Amperage (Current)</h2>
                 <div class="chart-container">
                     <svg id="amperage-chart"></svg>
@@ -201,28 +228,55 @@
             </div>
 
             <!-- RSSI Chart Card -->
-            <div class="chart-card">
+            <div class="chart-card grid-area-rssi">
                 <h2 class="text-2xl font-bold mb-4">RSSI (Signal Strength)</h2>
                 <div class="chart-container">
                     <svg id="rssi-chart"></svg>
                 </div>
             </div>
 
-            <!-- Example for a dynamic "Cost Predicted" based on energy data -->
-            <div class="chart-card col-span-full md:col-span-1">
+            <!-- Predicted Cost Card -->
+            <div class="chart-card grid-area-predicted-cost">
                 <h2 class="text-2xl font-bold mb-4">Predicted Cost</h2>
                 <div class="flex flex-col items-center justify-center flex-grow">
                     <div id="predicted-cost-display" class="text-5xl font-bold text-green-400">
-                        $0.00
+                        ₹0.00
                     </div>
                     <p class="text-gray-400 text-sm mt-2">
-                        (Based on Energy data and $0.15/kWh)
+                        (Based on Energy data and ₹15/kWh)
                     </p>
                 </div>
             </div>
 
-            <!-- Example for a dynamic "Usage Estimation" based on energy data -->
-            <div class="chart-card col-span-full md:col-span-2">
+            <!-- Energy Distribution (Peak vs. Off-Peak) Pie Chart -->
+            <div class="chart-card grid-area-peak-hours-dist">
+                <h2 class="text-2xl font-bold mb-4">Energy Distribution</h2>
+                <div class="flex flex-grow items-center justify-center flex-col md:flex-row">
+                    <div class="chart-container pie-chart w-full md:w-2/3 h-full">
+                        <svg id="energy-distribution-pie-chart"></svg>
+                    </div>
+                    <div id="pie-chart-legend" class="mt-4 md:mt-0 md:ml-4 text-sm text-gray-300 flex flex-col justify-center">
+                        <!-- Legend will be dynamically populated -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Identified Peak Hours Card -->
+            <div class="chart-card grid-area-identified-peak-hours">
+                <h2 class="text-2xl font-bold mb-4">Identified Peak Hours</h2>
+                <div class="flex flex-col items-center justify-center flex-grow">
+                    <p class="text-gray-300 text-lg mb-2">Based on historical consumption:</p>
+                    <div id="peak-hours-list" class="text-2xl font-bold text-yellow-400 text-center">
+                        <!-- Peak hours will be dynamically populated here -->
+                    </div>
+                    <p class="text-gray-400 text-sm mt-2">
+                        (Times are 24-hour format)
+                    </p>
+                </div>
+            </div>
+
+            <!-- Usage Summary Card -->
+            <div class="chart-card grid-area-usage-summary">
                 <h2 class="text-2xl font-bold mb-4">Usage Summary</h2>
                 <div class="flex flex-col items-center justify-center flex-grow">
                     <p class="text-gray-300 text-xl mb-2">Total Energy Consumed: <span id="total-energy-display" class="font-bold text-green-400">0.00 kWh</span></p>
@@ -263,12 +317,16 @@
         const frequencySvg = d3.select("#frequency-chart"); // Using Current for this
         const amperageSvg = d3.select("#amperage-chart"); // Area chart for Current
         const rssiSvg = d3.select("#rssi-chart"); // New RSSI chart
+        const energyDistributionPieSvg = d3.select("#energy-distribution-pie-chart");
+
 
         // Dynamic content display elements
         const predictedCostDisplay = document.getElementById('predicted-cost-display');
         const totalEnergyDisplay = document.getElementById('total-energy-display');
         const avgVoltageDisplay = document.getElementById('avg-voltage-display');
         const avgCurrentDisplay = document.getElementById('avg-current-display');
+        const peakHoursList = document.getElementById('peak-hours-list');
+        const pieChartLegend = document.getElementById('pie-chart-legend');
 
 
         // Tooltip element
@@ -277,10 +335,10 @@
             .style("opacity", 0);
 
         let rawChartData = []; // To store all fetched raw data
-        let currentVoltageZoomTransform = d3.zoomIdentity; // To store the current zoom state for the voltage chart
-        let currentFrequencyZoomTransform = d3.zoomIdentity; // For frequency chart
-        let currentAmperageZoomTransform = d3.zoomIdentity; // For amperage chart
-        let currentRssiZoomTransform = d3.zoomIdentity; // For RSSI chart
+        let currentVoltageZoomTransform = d3.zoomIdentity;
+        let currentFrequencyZoomTransform = d3.zoomIdentity;
+        let currentAmperageZoomTransform = d3.zoomIdentity;
+        let currentRssiZoomTransform = d3.zoomIdentity;
 
 
         // Function to display error messages
@@ -481,7 +539,7 @@
             dots.attr("cx", d => x(d.timestamp_server)).attr("cy", d => y(d[metric]));
         }
 
-        // --- Energy Consumption Bar Chart ---
+        // --- Energy Consumption Line Chart (Daily Aggregation) ---
         function drawEnergyConsumptionChart(data) {
             energyConsumptionSvg.selectAll("*").remove();
 
@@ -515,27 +573,30 @@
                 .attr("transform", `translate(${margin.left},${margin.top})`);
 
             // X scale (Dates)
-            const x = d3.scaleBand()
-                .domain(aggregatedData.map(d => d.date))
-                .range([0, width])
-                .padding(0.2);
+            const x = d3.scaleTime()
+                .domain(d3.extent(aggregatedData, d => d.date))
+                .range([0, width]);
 
             // Y scale (Total Energy)
             const y = d3.scaleLinear()
                 .domain([0, d3.max(aggregatedData, d => d.totalEnergy) * 1.1])
                 .range([height, 0]);
 
-            // X Axis
-            g.append("g")
+            // Define the line generator
+            const line = d3.line()
+                .x(d => x(d.date))
+                .y(d => y(d.totalEnergy));
+
+            // Axes
+            const xAxis = g.append("g")
                 .attr("class", "axis x-axis")
                 .attr("transform", `translate(0,${height})`)
-                .call(d3.axisBottom(x).tickFormat(d3.timeFormat("%b %d")))
+                .call(d3.axisBottom(x).ticks(d3.timeDay.every(1)).tickFormat(d3.timeFormat("%b %d")))
                 .selectAll("text")
                 .attr("transform", "rotate(-45)")
                 .style("text-anchor", "end");
 
-            // Y Axis
-            g.append("g")
+            const yAxis = g.append("g")
                 .attr("class", "axis y-axis")
                 .call(d3.axisLeft(y).ticks(5));
 
@@ -549,16 +610,21 @@
                 .style("fill", "#a0aec0")
                 .text("Energy (Wh)");
 
-            // Bars
-            g.selectAll(".bar")
+            // Line path
+            const linePath = g.append("path")
+                .datum(aggregatedData)
+                .attr("class", "line")
+                .attr("stroke", "#60a5fa"); /* Blue-400 */
+
+            // Dots for data points
+            const dots = g.selectAll(".dot")
                 .data(aggregatedData)
-                .enter().append("rect")
-                .attr("class", "bar")
-                .attr("x", d => x(d.date))
-                .attr("y", d => y(d.totalEnergy))
-                .attr("width", x.bandwidth())
-                .attr("height", d => height - y(d.totalEnergy))
-                .attr("fill", "#60a5fa") /* Blue-400 */
+                .enter().append("circle")
+                .attr("class", "dot")
+                .attr("r", 4)
+                .attr("fill", "#60a5fa")
+                .attr("stroke", "#2d3748")
+                .attr("stroke-width", 1.5)
                 .on("mouseover", (event, d) => {
                     tooltip.transition().duration(200).style("opacity", .9);
                     tooltip.html(`
@@ -798,14 +864,135 @@
             dots.attr("cx", d => x(d.timestamp_server)).attr("cy", d => y(d.rssi));
         }
 
+        // --- Peak Hour and Energy Distribution Logic ---
+        function processPeakHourData(data) {
+            // Filter data to only include valid entries for peak hour calculation
+            const validData = data.filter(d => d.energy !== undefined && d.energy !== null && d.timestamp_server instanceof Date && !isNaN(d.timestamp_server));
+
+            const hourlyEnergy = d3.rollup(validData,
+                v => d3.sum(v, d => d.energy || 0), // Sum energy for each hour
+                d => d.timestamp_server.getHours() // Group by hour of the day (0-23)
+            );
+
+            // Convert to array of {hour, totalEnergy} for sorting
+            const hourlyEnergyArray = Array.from(hourlyEnergy, ([hour, totalEnergy]) => ({ hour, totalEnergy }));
+
+            // Sort by total energy to find peak hours
+            hourlyEnergyArray.sort((a, b) => b.totalEnergy - a.totalEnergy);
+
+            // Identify top N peak hours (e.g., top 3)
+            const numPeakHours = 3; // You can adjust this number
+            const identifiedPeakHours = hourlyEnergyArray.slice(0, numPeakHours).map(d => d.hour);
+            
+            // Calculate total energy for peak vs off-peak
+            let peakHoursTotalEnergy = 0;
+            let offPeakHoursTotalEnergy = 0;
+
+            validData.forEach(d => {
+                const hour = d.timestamp_server.getHours();
+                if (identifiedPeakHours.includes(hour)) {
+                    peakHoursTotalEnergy += d.energy;
+                } else {
+                    offPeakHoursTotalEnergy += d.energy;
+                }
+            });
+
+            return {
+                peakHoursTotalEnergy,
+                offPeakHoursTotalEnergy,
+                identifiedPeakHours: identifiedPeakHours.sort((a, b) => a - b) // Sort for display
+            };
+        }
+
+        // --- Pie Chart Drawing Function ---
+        function drawEnergyDistributionPieChart(svgElement, peakEnergy, offPeakEnergy) {
+            svgElement.selectAll("*").remove();
+            pieChartLegend.innerHTML = ''; // Clear existing legend
+
+            const parentWidth = svgElement.node().parentNode.clientWidth;
+            const parentHeight = svgElement.node().parentNode.clientHeight;
+
+            const radius = Math.min(parentWidth, parentHeight) / 2 - 20; // Adjusted for padding
+            const centerX = parentWidth / 2;
+            const centerY = parentHeight / 2;
+
+            if (peakEnergy === 0 && offPeakEnergy === 0) {
+                 svgElement.append("text")
+                    .attr("x", centerX)
+                    .attr("y", centerY)
+                    .attr("text-anchor", "middle")
+                    .style("font-size", "1rem")
+                    .style("fill", "#a0aec0")
+                    .text("No energy data for distribution.");
+                return;
+            }
+
+            const data = [
+                { category: 'Peak Hours', value: peakEnergy, color: '#ef4444' }, // Red-500
+                { category: 'Off-Peak Hours', value: offPeakEnergy, color: '#60a5fa' } // Blue-400
+            ];
+
+            const pie = d3.pie()
+                .value(d => d.value)
+                .sort(null); // No sorting, maintain order
+
+            const arc = d3.arc()
+                .innerRadius(0)
+                .outerRadius(radius);
+
+            const arcs = g => g.append("g")
+                .attr("transform", `translate(${centerX}, ${centerY})`)
+                .selectAll("arc")
+                .data(pie(data))
+                .enter()
+                .append("g")
+                .attr("class", "arc");
+
+            const paths = arcs(svgElement).append("path")
+                .attr("d", arc)
+                .attr("fill", d => d.data.color)
+                .attr("stroke", "#1a202c")
+                .style("stroke-width", "2px")
+                .on("mouseover", (event, d) => {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`
+                        <strong>${d.data.category}:</strong> ${d.data.value.toFixed(2)} Wh<br/>
+                        <strong>Percentage:</strong> ${(d.data.value / (peakEnergy + offPeakEnergy) * 100).toFixed(2)}%
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+
+            // Add text labels
+            arcs(svgElement).append("text")
+                .attr("transform", d => `translate(${arc.centroid(d)})`)
+                .attr("class", "pie-label")
+                .text(d => `${(d.data.value / (peakEnergy + offPeakEnergy) * 100).toFixed(1)}%`);
+
+            // Add legend
+            data.forEach(item => {
+                const legendItem = document.createElement('div');
+                legendItem.classList.add('legend-item');
+                legendItem.innerHTML = `
+                    <div class="legend-color-box" style="background-color: ${item.color};"></div>
+                    <span>${item.category}</span>
+                `;
+                pieChartLegend.appendChild(legendItem);
+            });
+        }
+
 
         // Function to update dynamic text content
         function updateDynamicContent(data) {
             if (data.length === 0) {
-                predictedCostDisplay.textContent = '$0.00';
+                predictedCostDisplay.textContent = '₹0.00';
                 totalEnergyDisplay.textContent = '0.00 kWh';
                 avgVoltageDisplay.textContent = '0.00 V';
                 avgCurrentDisplay.textContent = '0.00 A';
+                peakHoursList.textContent = 'N/A';
                 return;
             }
 
@@ -814,10 +1001,10 @@
             const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
             totalEnergyDisplay.textContent = `${totalEnergyKWh.toFixed(2)} kWh`;
 
-            // Calculate predicted cost (example rate: $0.15 per kWh)
-            const costPerKWh = 0.15;
+            // Calculate predicted cost (example rate: ₹15 per kWh)
+            const costPerKWh = 15; // Changed to Indian Rupee rate
             const predictedCost = totalEnergyKWh * costPerKWh;
-            predictedCostDisplay.textContent = `$${predictedCost.toFixed(2)}`;
+            predictedCostDisplay.textContent = `₹${predictedCost.toFixed(2)}`;
 
             // Calculate average voltage and current
             const avgVoltage = d3.mean(data, d => d.voltage || 0);
@@ -825,6 +1012,17 @@
 
             const avgCurrent = d3.mean(data, d => d.current || 0);
             avgCurrentDisplay.textContent = `${avgCurrent.toFixed(2)} A`;
+
+            // Process and display peak hours
+            const peakData = processPeakHourData(data);
+            if (peakData.identifiedPeakHours.length > 0) {
+                peakHoursList.textContent = peakData.identifiedPeakHours.map(h => `${h}:00`).join(', ');
+            } else {
+                peakHoursList.textContent = 'Not enough data to identify.';
+            }
+
+            // Draw pie chart
+            drawEnergyDistributionPieChart(energyDistributionPieSvg, peakData.peakHoursTotalEnergy, peakData.offPeakHoursTotalEnergy);
         }
 
 
@@ -848,6 +1046,7 @@
                 frequencySvg.selectAll("*").remove();
                 amperageSvg.selectAll("*").remove();
                 rssiSvg.selectAll("*").remove();
+                energyDistributionPieSvg.selectAll("*").remove(); // Clear pie chart
                 updateDynamicContent([]); // Clear dynamic content if no data
                 return;
             } else {
@@ -862,7 +1061,7 @@
             drawAmperageChart(currentData); // Orange for Amperage Area
             drawLineChart(rssiSvg, rssiData, 'rssi', '#9f7aea', 'RSSI (dBm)', currentRssiZoomTransform); // Purple for RSSI
 
-            // Update dynamic textual content
+            // Update dynamic textual content and draw pie chart
             updateDynamicContent(filteredData);
         }
 
@@ -874,11 +1073,31 @@
 
                 const data = snapshot.val();
                 if (data) {
-                    rawChartData = Object.keys(data).map(key => ({
-                        id: key,
-                        timestamp_server: new Date(data[key].timestamp_server), // Parse timestamp to Date object
-                        ...data[key]
-                    }));
+                    rawChartData = Object.keys(data).map(key => {
+                        const item = data[key];
+                        const timestampValue = item.timestamp_server;
+                        let timestamp;
+
+                        // Robustly attempt to create a Date object
+                        if (typeof timestampValue === 'number' || typeof timestampValue === 'string') {
+                            timestamp = new Date(timestampValue);
+                        } else {
+                            console.warn(`Unexpected timestamp_server type for key ${key}:`, timestampValue);
+                            return null; // Return null for invalid types
+                        }
+
+                        // Ensure timestamp is a valid Date object after conversion
+                        if (!(timestamp instanceof Date) || isNaN(timestamp.getTime())) {
+                            console.warn(`Invalid Date object created for key ${key} from:`, timestampValue);
+                            return null; // Return null for invalid date objects
+                        }
+                        return {
+                            id: key,
+                            timestamp_server: timestamp, // Ensure this is a Date object
+                            ...item
+                        };
+                    }).filter(d => d !== null); // Filter out any null entries (invalid dates)
+
                     // Sort data by server timestamp for correct line drawing and aggregation
                     rawChartData.sort((a, b) => a.timestamp_server - b.timestamp_server);
 
@@ -891,6 +1110,7 @@
                     frequencySvg.selectAll("*").remove();
                     amperageSvg.selectAll("*").remove();
                     rssiSvg.selectAll("*").remove();
+                    energyDistributionPieSvg.selectAll("*").remove(); // Clear pie chart
                     updateDynamicContent([]); // Clear dynamic content if no data
                 }
             } catch (err) {
